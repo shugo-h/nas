@@ -2,7 +2,7 @@ package nasType
 
 import (
 	"bytes"
-	"errors"
+	"fmt"
 	"strings"
 )
 
@@ -48,48 +48,62 @@ func (a *DNN) SetLen(len uint8) {
 // DNN 9.11.2.1A
 // DNN Row, sBit, len = [0, 0], 8 , INF
 func (a *DNN) GetDNN() string {
-	return rfc1035tofqdn(a.Buffer)
+	return a.decode(a.Buffer)
 }
 
 // DNN 9.11.2.1A
 // DNN Row, sBit, len = [0, 0], 8 , INF
 func (a *DNN) SetDNN(dNN string) {
-	if b, err := fqdnToRfc1035(dNN); err == nil {
-		a.Buffer = b
-		a.Len = uint8(len(a.Buffer))
-	}
+	a.Buffer, _ = a.encode(dNN)
+	a.Len = uint8(len(a.Buffer))
 }
 
-func fqdnToRfc1035(fqdn string) ([]byte, error) {
-	var rfc1035RR []byte
-	domainSegments := strings.Split(fqdn, ".")
+// Comply with 3GPP TS 23.003 clause 9.1
+func (a *DNN) encode(fqdn string) ([]uint8, error) {
+	if len(fqdn) >= 100 {
+		return nil, fmt.Errorf("DNN string is too long")
+	}
 
-	for _, segment := range domainSegments {
-		if len(segment) > 63 {
-			return nil, errors.New("fqdn limit the label to 63 octets or less")
+	var dnnNI string
+	labels := strings.Split(fqdn, ".")
+	if labels[len(labels)-1] == "gprs" {
+		// containing APN-OI
+		if len(labels) < 4 {
+			return nil, fmt.Errorf("the number of DNN labes are too small (%s) ", fqdn)
 		}
-		rfc1035RR = append(rfc1035RR, uint8(len(segment)))
-		rfc1035RR = append(rfc1035RR, segment...)
+		dnnNI = strings.Join(labels[:len(labels)-3], ".")
+	} else {
+		// APN-NI only
+		dnnNI = fqdn
 	}
 
-	if len(rfc1035RR) > 255 {
-		return nil, errors.New("fqdn should less then 255 octet")
+	if len(dnnNI) >= 63 {
+		return nil, fmt.Errorf("APN-NI of the DNN is too long")
 	}
-	return rfc1035RR, nil
+
+	encodedDNN := make([]uint8, 0, 100)
+	for _, label := range labels {
+		encodedDNN = append(encodedDNN, uint8(len(label)))
+		encodedDNN = append(encodedDNN, []uint8(label)...)
+	}
+	return encodedDNN, nil
 }
 
-func rfc1035tofqdn(rfc1035RR []byte) string {
-	rfc1035Reader := bytes.NewBuffer(rfc1035RR)
-	fqdn := ""
-
+// Comply with 3GPP TS 23.003 clause 9.1
+func (a *DNN) decode(dNN []uint8) string {
+	var fqdn string
+	buffer := bytes.NewBuffer(dNN)
 	for {
-		// length of label
-		if labelLen, err := rfc1035Reader.ReadByte(); err != nil {
+		if labelLen, err := buffer.ReadByte(); err != nil {
 			break
 		} else {
-			fqdn += string(rfc1035Reader.Next(int(labelLen))) + "."
+			fqdn += string(buffer.Next(int(labelLen))) + "."
 		}
 	}
 
-	return fqdn[0 : len(fqdn)-1]
+	if len(fqdn) == 0 {
+		return ""
+	} else {
+		return fqdn[:len(fqdn)-1]
+	}
 }
